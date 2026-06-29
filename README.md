@@ -1,421 +1,307 @@
-# scripts_copy_vault_to_domino_env
-
-# Domino Secret Sync — Vault COS vers variables d’environnement Domino
+# Automatisation de l'injection des secrets COS Vault vers Domino
 
 ## 1. Objectif
 
-Ce projet permet de récupérer automatiquement les secrets COS stockés dans HashiCorp Vault, puis de les injecter dans les variables d’environnement d’un projet Domino spécifique.
+### Contexte
 
-Le pipeline GitLab est lancé manuellement avec les informations suivantes :
+Les projets Domino utilisent des variables d'environnement contenant les identifiants COS (Object Storage).
 
-```text
-DOMINO_PROJECT_NAME
-VAULT_COS_NAME
-AP_CODE
-VAULT_NAMESPACE
-VAULT_ENV
-```
+Jusqu'à présent, ces variables étaient créées manuellement dans Domino :
 
-Le script lit les secrets COS depuis Vault et crée les variables d’environnement dans Domino.
+* connexion à Vault
+* récupération des secrets
+* copie des valeurs
+* création des variables Domino
 
-Important : le script ne remplace jamais une variable existante dans Domino. Si une variable existe déjà, le pipeline s’arrête. L’utilisateur doit supprimer manuellement la variable dans Domino puis relancer le pipeline.
+Cette procédure est :
 
----
+* chronophage ;
+* source d'erreurs humaines ;
+* difficilement traçable.
 
-## 2. Schéma global
+### Objectif de la solution
 
-```text
-Utilisateur GitLab
-      │
-      │ Lance le pipeline avec :
-      │ DOMINO_PROJECT_NAME
-      │ VAULT_COS_NAME
-      │ AP_CODE
-      │ VAULT_NAMESPACE
-      │ VAULT_ENV
-      ▼
-GitLab CI/CD
-      │
-      ├── Stage 1 : validate
-      │       ├── Vérifie le projet Domino
-      │       ├── Vérifie le path Vault
-      │       ├── Vérifie les clés COS dans Vault
-      │       └── Vérifie que les variables Domino n’existent pas déjà
-      │
-      ├── Stage 2 : fetch
-      │       ├── Récupère les secrets COS depuis Vault
-      │       └── Génère secrets.env
-      │
-      └── Stage 3 : inject
-              ├── Lit secrets.env
-              └── Crée les variables dans Domino
-```
+Automatiser la récupération des secrets COS depuis HashiCorp Vault et leur création dans Domino via l'API REST.
+
+Le pipeline garantit également qu'aucune variable existante ne soit écrasée automatiquement.
 
 ---
 
-## 3. Mapping Vault vers Domino
-
-Les secrets sont stockés dans Vault avec ces noms :
+# 2. Architecture
 
 ```text
-COS_HMAC_KEYS_ACCESS_KEY_ID_READER
-COS_HMAC_KEYS_SECRET_ACCESS_KEY_READER
-```
-
-Ils sont injectés dans Domino avec ces noms :
-
-```text
-COS_API_ID_KEY_READER_${AP_CODE}
-COS_API_SECRET_KEY_READER_${AP_CODE}
-```
-
-Exemple avec :
-
-```text
-AP_CODE=AP123
-```
-
-Résultat dans Domino :
-
-```text
-COS_API_ID_KEY_READER_AP123
-COS_API_SECRET_KEY_READER_AP123
-```
-
-Mapping complet :
-
-```text
-Vault:
-COS_HMAC_KEYS_ACCESS_KEY_ID_READER
-        │
-        ▼
-Domino:
-COS_API_ID_KEY_READER_AP123
-
-
-Vault:
-COS_HMAC_KEYS_SECRET_ACCESS_KEY_READER
-        │
-        ▼
-Domino:
-COS_API_SECRET_KEY_READER_AP123
+                  GitLab Pipeline
+                         │
+                         ▼
+               Saisie des paramètres
+                         │
+                         ▼
+                 Stage 1 : Validate
+                         │
+        ┌────────────────┴────────────────┐
+        │                                 │
+        ▼                                 ▼
+ Vérification Vault                 Vérification Domino
+        │                                 │
+        └────────────────┬────────────────┘
+                         │
+                         ▼
+                  Stage 2 : Fetch
+                         │
+                         ▼
+            Lecture des secrets Vault
+                         │
+                         ▼
+                Génération secrets.env
+                         │
+                         ▼
+                 Stage 3 : Inject
+                         │
+                         ▼
+         Création des variables Domino
 ```
 
 ---
 
-## 4. Structure Vault
+# 3. Fonctionnement
 
-Exemple de commande Vault utilisée manuellement :
+Le pipeline comporte trois étapes.
 
-```bash
-VAULT_ADDR="https://vault-a-prod.com" \
-VAULT_NAMESPACE="UPM_FRB/ECO021003014" \
-VAULT_TOKEN="$VAULT_TOKEN_PROD_A" \
-vault kv list secret/
+## Stage 1 — Validate
+
+Cette étape réalise toutes les vérifications nécessaires avant toute modification.
+
+Contrôles effectués :
+
+* validation des paramètres saisis ;
+* sélection du bon environnement Vault ;
+* récupération du Project ID Domino ;
+* vérification de l'existence du secret Vault ;
+* vérification de la présence des deux clés COS ;
+* vérification que les variables Domino n'existent pas déjà.
+
+Si une variable est déjà présente dans Domino, le pipeline s'arrête volontairement.
+
+Aucune modification n'est effectuée.
+
+---
+
+## Stage 2 — Fetch
+
+Lecture des secrets dans Vault.
+
+Chemin utilisé :
+
 ```
-
-Le secret COS est attendu ici :
-
-```text
-secret/objsto/${VAULT_COS_NAME}
+objsto/data/<VAULT_COS_NAME>
 ```
 
 Exemple :
 
-```text
-secret/objsto/co002ixxxx
+```
+objsto/data/co002i006891
 ```
 
----
+Secrets récupérés :
 
-## 5. Environnements Vault
+```
+cos_hmac_keys_access_key_id_reader
 
-Il existe 4 environnements Vault possibles :
-
-```text
-HPROD-A
-HPROD-B
-PROD-A
-PROD-B
+cos_hmac_keys_secret_access_key_reader
 ```
 
-Chaque environnement possède sa propre URL Vault et son propre token.
+Les deux valeurs sont stockées temporairement dans :
 
-Mapping :
-
-```text
-HPROD-A  -> VAULT_URL_HPROD_A  + VAULT_TOKEN_HPROD_A
-HPROD-B  -> VAULT_URL_HPROD_B  + VAULT_TOKEN_HPROD_B
-PROD-A   -> VAULT_URL_PROD_A   + VAULT_TOKEN_PROD_A
-PROD-B   -> VAULT_URL_PROD_B   + VAULT_TOKEN_PROD_B
 ```
-
-Exemple :
-
-```text
-VAULT_ENV=PROD-A
-```
-
-Le script utilisera automatiquement :
-
-```text
-VAULT_URL_PROD_A
-VAULT_TOKEN_PROD_A
-```
-
----
-
-## 6. Variables à renseigner au lancement du pipeline
-
-Ces variables sont saisies dans le formulaire GitLab au moment du lancement manuel :
-
-```text
-DOMINO_PROJECT_NAME=ia-bcef-dev
-VAULT_COS_NAME=co002ixxxx
-AP_CODE=AP123
-VAULT_NAMESPACE=UPM_FRB/ECO021003014
-VAULT_ENV=PROD-A
-```
-
-Description :
-
-| Variable              | Description                                              | Exemple                |
-| --------------------- | -------------------------------------------------------- | ---------------------- |
-| `DOMINO_PROJECT_NAME` | Nom du projet Domino cible                               | `ia-bcef-dev`          |
-| `VAULT_COS_NAME`      | Nom du COS dans Vault                                    | `co002ixxxx`           |
-| `AP_CODE`             | Code applicatif utilisé dans le nom des variables Domino | `AP123`                |
-| `VAULT_NAMESPACE`     | Namespace Vault                                          | `UPM_FRB/ECO021003014` |
-| `VAULT_ENV`           | Environnement Vault exact                                | `PROD-A`               |
-
----
-
-## 7. Variables protégées GitLab
-
-Ces variables doivent être créées dans GitLab CI/CD Variables, en mode protected/masked si possible :
-
-```text
-DOMINO_URL
-DOMINO_API_KEY
-
-VAULT_URL_HPROD_A
-VAULT_TOKEN_HPROD_A
-
-VAULT_URL_HPROD_B
-VAULT_TOKEN_HPROD_B
-
-VAULT_URL_PROD_A
-VAULT_TOKEN_PROD_A
-
-VAULT_URL_PROD_B
-VAULT_TOKEN_PROD_B
-```
-
----
-
-## 8. Pipeline GitLab
-
-Le pipeline contient 3 stages :
-
-```yaml
-stages:
-  - validate
-  - fetch
-  - inject
-```
-
-### Stage validate
-
-Ce stage vérifie :
-
-```text
-- les variables obligatoires
-- l’accès à Domino
-- l’existence du projet Domino
-- l’accès à Vault
-- l’existence du path secret/objsto/${VAULT_COS_NAME}
-- l’existence des deux clés COS dans Vault
-- l’absence des variables cibles dans Domino
-```
-
-Si une variable existe déjà dans Domino, le pipeline s’arrête.
-
-Exemple d’erreur :
-
-```text
-ERROR: La variable COS_API_ID_KEY_READER_AP123 existe déjà dans Domino.
-Supprime-la manuellement depuis Domino puis relance le job.
-```
-
-### Stage fetch
-
-Ce stage récupère les secrets depuis Vault et génère un fichier :
-
-```text
 secrets.env
 ```
 
-Ce fichier est transmis au stage suivant via artifact GitLab.
-
-### Stage inject
-
-Ce stage lit `secrets.env` et crée les variables dans Domino.
-
-Il fait uniquement des créations.
-
-Il ne fait jamais de mise à jour.
+Cet artefact est conservé uniquement pendant l'exécution du pipeline.
 
 ---
 
-## 9. Règle de sécurité importante
+## Stage 3 — Inject
 
-Le script ne doit jamais écraser une variable existante dans Domino.
+Création des variables Domino via l'API REST.
 
-Comportement attendu :
+Variables créées :
 
-```text
-Variable absente dans Domino
-        │
-        ▼
-Création de la variable
+```
+COS_API_ID_KEY_READER_<AP_CODE>
 
-
-Variable déjà présente dans Domino
-        │
-        ▼
-Arrêt du pipeline
-        │
-        ▼
-Suppression manuelle requise dans Domino
-        │
-        ▼
-Relance du pipeline
+COS_API_SECRET_KEY_READER_<AP_CODE>
 ```
 
-Cette règle évite d’écraser un secret déjà utilisé par un projet.
+Exemple :
+
+```
+AP_CODE = AP90225
+
+↓
+
+COS_API_ID_KEY_READER_AP90225
+
+COS_API_SECRET_KEY_READER_AP90225
+```
 
 ---
 
-## 10. Exemple complet
+# 4. Paramètres du pipeline
 
-Entrée utilisateur dans GitLab :
+Lors du lancement du pipeline, les informations suivantes doivent être renseignées.
 
-```text
-DOMINO_PROJECT_NAME=ia-bcef-dev
-VAULT_COS_NAME=co002ixxxx
-AP_CODE=AP123
-VAULT_NAMESPACE=UPM_FRB/ECO021003014
-VAULT_ENV=PROD-A
+| Paramètre           | Description          | Exemple                    |
+| ------------------- | -------------------- | -------------------------- |
+| DOMINO_PROJECT_NAME | Nom du projet Domino | appli-sample-dev           |
+| VAULT_COS_NAME      | Nom du secret COS    | co002i006891               |
+| AP_CODE             | Code application     | AP90225                    |
+| VAULT_NAMESPACE     | Namespace Vault      | UPM_FRB/RESFR/EC002I003013 |
+| VAULT_ENV           | Environnement Vault  | HPROD-A                    |
+
+---
+
+# 5. Environnements Vault
+
+Le pipeline sélectionne automatiquement la bonne URL et le bon token Vault.
+
+| VAULT_ENV | URL utilisée  | Token GitLab        |
+| --------- | ------------- | ------------------- |
+| HPROD-A   | Vault HPROD A | VAULT_TOKEN_HPROD_A |
+| HPROD-B   | Vault HPROD B | VAULT_TOKEN_HPROD_B |
+| PROD-A    | Vault PROD A  | VAULT_TOKEN_PROD_A  |
+| PROD-B    | Vault PROD B  | VAULT_TOKEN_PROD_B  |
+
+Aucun token n'est demandé lors du lancement du pipeline.
+
+---
+
+# 6. Variables GitLab requises
+
+Les variables suivantes doivent être configurées dans les variables CI/CD du projet GitLab.
+
+## Domino
+
+```
+DOMINO_URL
+
+DOMINO_PROJECT_KEY
 ```
 
-Vault sélectionné :
+## Vault
 
-```text
+```
+VAULT_URL_HPROD_A
+VAULT_URL_HPROD_B
 VAULT_URL_PROD_A
+VAULT_URL_PROD_B
+
+VAULT_TOKEN_HPROD_A
+VAULT_TOKEN_HPROD_B
 VAULT_TOKEN_PROD_A
+VAULT_TOKEN_PROD_B
 ```
 
-Path Vault lu :
+Toutes les variables sensibles doivent être :
 
-```text
-secret/objsto/co002ixxxx
+* Protected
+* Masked
+
+---
+
+# 7. Sécurité
+
+Le pipeline applique plusieurs mécanismes de sécurité.
+
+## Pas d'écrasement
+
+Si une variable existe déjà dans Domino :
+
+```
+Le pipeline s'arrête.
+
+Aucune mise à jour n'est effectuée.
 ```
 
-Clés lues dans Vault :
+La suppression doit être réalisée manuellement depuis Domino.
 
-```text
-COS_HMAC_KEYS_ACCESS_KEY_ID_READER
-COS_HMAC_KEYS_SECRET_ACCESS_KEY_READER
+Cette approche évite toute perte accidentelle d'un secret en production.
+
+---
+
+## Secrets Vault
+
+Les secrets :
+
+* ne sont jamais affichés dans les logs ;
+* ne sont jamais stockés dans Git ;
+* sont uniquement transmis à Domino via HTTPS.
+
+---
+
+## Traçabilité
+
+Chaque exécution est historisée dans GitLab.
+
+Les opérations sont entièrement auditables.
+
+---
+
+# 8. Exemple d'exécution
+
+Entrées :
+
+```
+DOMINO_PROJECT_NAME = appli-sample-dev
+
+VAULT_COS_NAME = co002i006891
+
+AP_CODE = AP90225
+
+VAULT_NAMESPACE = UPM_FRB/RESFR/EC002I003013
+
+VAULT_ENV = HPROD-A
 ```
 
-Variables créées dans Domino :
+Secrets Vault :
 
-```text
-COS_API_ID_KEY_READER_AP123
-COS_API_SECRET_KEY_READER_AP123
+```
+cos_hmac_keys_access_key_id_reader
+
+cos_hmac_keys_secret_access_key_reader
+```
+
+Variables Domino créées :
+
+```
+COS_API_ID_KEY_READER_AP90225
+
+COS_API_SECRET_KEY_READER_AP90225
 ```
 
 ---
 
-## 11. Arborescence du projet
+# 9. Gestion des erreurs
 
-```text
-domino-secret-sync/
-├── .gitlab-ci.yml
-└── scripts/
-    └── copy_vault_to_domino_env.sh
-```
+Le pipeline peut s'arrêter dans les cas suivants :
 
----
+* Projet Domino introuvable
+* Namespace Vault invalide
+* Secret Vault inexistant
+* Clé COS absente
+* Variable Domino déjà existante
+* URL Vault non configurée
+* Token Vault absent
 
-## 12. Commande de test locale
-
-Exemple de test local du stage validate :
-
-```bash
-export DOMINO_URL="https://domino.example.com"
-export DOMINO_API_KEY="xxxx"
-
-export VAULT_URL_PROD_A="https://vault-a-prod.com"
-export VAULT_TOKEN_PROD_A="xxxx"
-
-./scripts/copy_vault_to_domino_env.sh \
-  validate \
-  ia-bcef-dev \
-  co002ixxxx \
-  AP123 \
-  UPM_FRB/ECO021003014 \
-  PROD-A
-```
+Chaque erreur est explicite afin de faciliter le diagnostic.
 
 ---
 
-## 13. Résultat attendu dans Domino
+# 10. Bénéfices
 
-Dans le projet Domino cible, les variables suivantes doivent apparaître comme variables secrètes :
-
-```text
-COS_API_ID_KEY_READER_AP123
-COS_API_SECRET_KEY_READER_AP123
-```
-
-Elles seront utilisables par les Jobs et Apps Domino selon le comportement de l’API Domino utilisée.
-
----
-
-## 14. Points d’attention
-
-* Vérifier si le moteur Vault `secret/` est en KV v1 ou KV v2.
-* Si KV v1 : endpoint API attendu :
-
-  ```text
-  /v1/secret/objsto/co002ixxxx
-  ```
-* Si KV v2 : endpoint API attendu :
-
-  ```text
-  /v1/secret/data/objsto/co002ixxxx
-  ```
-* Le script actuel doit être aligné avec le type KV réel.
-* Ne pas stocker les tokens Vault en clair dans le dépôt Git.
-* Ne pas afficher les valeurs des secrets dans les logs.
-* Protéger et masquer les variables GitLab sensibles.
-
-
-
-domino_env_var_exists() {
-  local project_id="$1"
-  local var_name="$2"
-
-  local response
-  response=$(curl --silent --show-error --fail \
-    --header "X-Domino-Api-Key: ${DOMINO_PROJECT_KEY}" \
-    "${DOMINO_URL}/v4/projects/${project_id}/environmentVariables") \
-    || error "Impossible de lire les variables Domino du projet ${project_id}"
-
-  echo "${response}" | jq -e --arg name "${var_name}" '
-    .[]
-    | select(
-        (.name // .key // .variableName // "") == $name
-      )
-  ' >/dev/null
-}
+* automatisation complète ;
+* suppression des manipulations manuelles ;
+* réduction du risque d'erreur ;
+* sécurité renforcée ;
+* audit GitLab ;
+* pipeline réutilisable pour tous les projets Domino ;
+* support de plusieurs environnements Vault.
