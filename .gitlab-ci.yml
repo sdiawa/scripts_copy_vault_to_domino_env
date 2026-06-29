@@ -38,3 +38,4 @@ inject_domino:
     - fetch_vault
   script:
     - ./scripts/copy_vault_to_domino_env.sh inject "$DOMINO_PROJECT_NAME" "$VAULT_COS_NAME" "$AP_CODE" "$VAULT_NAMESPACE" "$VAULT_ENV"
+    
