@@ -1,28 +1,57 @@
+spec:
+  inputs:
+    domino_project_name:
+      description: "Nom du projet Domino cible"
+      type: string
+
+    vault_cos_name:
+      description: "Nom du COS dans Vault, ex: co002i006891"
+      type: string
+
+    ap_code:
+      description: "Code applicatif AP, ex: AP92311"
+      type: string
+
+    vault_namespace:
+      description: "Namespace Vault, ex: UPM_FRB/RESFR/EC002I003013"
+      type: string
+
+    vault_env:
+      description: "Environnement Vault"
+      type: string
+      options:
+        - HPROD-A
+        - HPROD-B
+        - PROD-A
+        - PROD-B
+
+---
+
 stages:
   - validate
   - fetch
   - inject
 
 variables:
-  DOMINO_PROJECT_NAME: ""
-  VAULT_COS_NAME: ""
-  AP_CODE: ""
-  VAULT_NAMESPACE: ""
-  VAULT_ENV: ""
+  DOMINO_PROJECT_NAME: $[[ inputs.domino_project_name ]]
+  VAULT_COS_NAME: $[[ inputs.vault_cos_name ]]
+  AP_CODE: $[[ inputs.ap_code ]]
+  VAULT_NAMESPACE: $[[ inputs.vault_namespace ]]
+  VAULT_ENV: $[[ inputs.vault_env ]]
 
-before_script:
-  - apk add --no-cache bash curl jq
-  - chmod +x scripts/copy_vault_to_domino_env.sh
+default:
+  image: alpine:3.20
+  before_script:
+    - apk add --no-cache bash curl jq
+    - chmod +x scripts/copy_vault_to_domino_env.sh
 
 validate:
   stage: validate
-  image: alpine:3.20
   script:
     - ./scripts/copy_vault_to_domino_env.sh validate "$DOMINO_PROJECT_NAME" "$VAULT_COS_NAME" "$AP_CODE" "$VAULT_NAMESPACE" "$VAULT_ENV"
 
 fetch_vault:
   stage: fetch
-  image: alpine:3.20
   script:
     - ./scripts/copy_vault_to_domino_env.sh fetch "$DOMINO_PROJECT_NAME" "$VAULT_COS_NAME" "$AP_CODE" "$VAULT_NAMESPACE" "$VAULT_ENV"
   artifacts:
@@ -32,10 +61,8 @@ fetch_vault:
 
 inject_domino:
   stage: inject
-  image: alpine:3.20
   when: manual
   dependencies:
     - fetch_vault
   script:
     - ./scripts/copy_vault_to_domino_env.sh inject "$DOMINO_PROJECT_NAME" "$VAULT_COS_NAME" "$AP_CODE" "$VAULT_NAMESPACE" "$VAULT_ENV"
-    
