@@ -159,21 +159,21 @@ vault_read_secret_value() {
   echo "${value}"
 }
 
-<!-- domino_env_var_exists() {
-  local project_id="$1"
-  local var_name="$2"
-  local response
-  local found
+# domino_env_var_exists() {
+#   local project_id="$1"
+#   local var_name="$2"
+#   local response
+#   local found
 
-  response=$(curl --silent --show-error --fail \
-    --header "X-Domino-Api-Key: ${DOMINO_API_KEY}" \
-    "${DOMINO_URL}/v4/projects/${project_id}/environmentVariables") \
-    || error "Impossible de lire les variables Domino du projet ${project_id}"
+#   response=$(curl --silent --show-error --fail \
+#     --header "X-Domino-Api-Key: ${DOMINO_API_KEY}" \
+#     "${DOMINO_URL}/v4/projects/${project_id}/environmentVariables") \
+#     || error "Impossible de lire les variables Domino du projet ${project_id}"
 
-  found=$(echo "${response}" | jq -r ".[] | select(.name == \"${var_name}\") | .id" | head -n 1)
+#   found=$(echo "${response}" | jq -r ".[] | select(.name == \"${var_name}\") | .id" | head -n 1)
 
-  [[ -n "${found}" && "${found}" != "null" ]]
-} -->
+#   [[ -n "${found}" && "${found}" != "null" ]]
+# }
 
 domino_env_var_exists() {
   local project_id="$1"
