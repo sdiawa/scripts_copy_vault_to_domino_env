@@ -402,7 +402,20 @@ Elles seront utilisables par les Jobs et Apps Domino selon le comportement de lâ
 
 
 
-curl -s \
-  -H "X-Vault-Token: ${VAULT_TOKEN_PROD_A}" \
-  -H "X-Vault-Namespace: UPM_FRB/ECO021003014" \
-  "https://vault-a-prod.com/v1/secret/data/objsto/co002ixxxx" | jq .
+domino_env_var_exists() {
+  local project_id="$1"
+  local var_name="$2"
+
+  local response
+  response=$(curl --silent --show-error --fail \
+    --header "X-Domino-Api-Key: ${DOMINO_PROJECT_KEY}" \
+    "${DOMINO_URL}/v4/projects/${project_id}/environmentVariables") \
+    || error "Impossible de lire les variables Domino du projet ${project_id}"
+
+  echo "${response}" | jq -e --arg name "${var_name}" '
+    .[]
+    | select(
+        (.name // .key // .variableName // "") == $name
+      )
+  ' >/dev/null
+}
