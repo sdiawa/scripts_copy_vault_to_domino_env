@@ -8,41 +8,48 @@ AP_CODE="${4:-}"
 VAULT_NAMESPACE="${5:-}"
 VAULT_ENV="${6:-}"
 
+VAULT_ENGINE="objsto"
+VAULT_API_PATH="${VAULT_ENGINE}/data/${VAULT_COS_NAME}"
+
 VAULT_ACCESS_KEY_NAME="cos_hmac_keys_access_key_id_reader"
 VAULT_SECRET_KEY_NAME="cos_hmac_keys_secret_access_key_reader"
 
 DOMINO_ACCESS_VAR_NAME="COS_API_ID_KEY_READER_${AP_CODE}"
 DOMINO_SECRET_VAR_NAME="COS_API_SECRET_KEY_READER_${AP_CODE}"
 
-VAULT_ENGINE="objsto"
-VAULT_API_PATH="${VAULT_ENGINE}/data/${VAULT_COS_NAME}"
 DOTENV_FILE="secrets.env"
 
 VAULT_ADDR=""
 VAULT_TOKEN=""
 
 log() {
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] INFO  $*"
+}
+
+warn() {
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARN  $*" >&2
 }
 
 error() {
   echo ""
-  echo "ERROR: $*" >&2
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR $*" >&2
   echo ""
   exit 1
 }
 
 usage() {
-  echo "Usage:"
-  echo "  $0 validate <DOMINO_PROJECT_NAME> <VAULT_COS_NAME> <AP_CODE> <VAULT_NAMESPACE> <VAULT_ENV>"
-  echo "  $0 fetch    <DOMINO_PROJECT_NAME> <VAULT_COS_NAME> <AP_CODE> <VAULT_NAMESPACE> <VAULT_ENV>"
-  echo "  $0 inject   <DOMINO_PROJECT_NAME> <VAULT_COS_NAME> <AP_CODE> <VAULT_NAMESPACE> <VAULT_ENV>"
-  echo ""
-  echo "VAULT_ENV accepted values:"
-  echo "  HPROD-A"
-  echo "  HPROD-B"
-  echo "  PROD-A"
-  echo "  PROD-B"
+  cat <<EOF
+Usage:
+  $0 validate <DOMINO_PROJECT_NAME> <VAULT_COS_NAME> <AP_CODE> <VAULT_NAMESPACE> <VAULT_ENV>
+  $0 fetch    <DOMINO_PROJECT_NAME> <VAULT_COS_NAME> <AP_CODE> <VAULT_NAMESPACE> <VAULT_ENV>
+  $0 inject   <DOMINO_PROJECT_NAME> <VAULT_COS_NAME> <AP_CODE> <VAULT_NAMESPACE> <VAULT_ENV>
+
+VAULT_ENV accepted values:
+  HPROD-A
+  HPROD-B
+  PROD-A
+  PROD-B
+EOF
   exit 1
 }
 
@@ -85,8 +92,8 @@ resolve_vault_config() {
       ;;
   esac
 
-  [[ -n "${VAULT_ADDR}" ]] || error "URL Vault non configurée pour VAULT_ENV=${VAULT_ENV}"
-  [[ -n "${VAULT_TOKEN}" ]] || error "Token Vault non configuré pour VAULT_ENV=${VAULT_ENV}"
+  [[ -n "${VAULT_ADDR}" ]] || error "URL Vault non configurée pour ${VAULT_ENV}"
+  [[ -n "${VAULT_TOKEN}" ]] || error "Token Vault non configuré pour ${VAULT_ENV}"
 
   VAULT_ADDR="${VAULT_ADDR%/}"
 }
@@ -95,25 +102,27 @@ check_required_env() {
   [[ -n "${DOMINO_URL:-}" ]] || error "DOMINO_URL is not set"
   [[ -n "${DOMINO_API_KEY:-}" ]] || error "DOMINO_API_KEY is not set"
 
+  DOMINO_URL="${DOMINO_URL%/}"
+
   if [[ "${ACTION}" == "validate" || "${ACTION}" == "fetch" ]]; then
     resolve_vault_config
   fi
-
-  DOMINO_URL="${DOMINO_URL%/}"
 }
 
 domino_get_project_id() {
   local project_name="$1"
-
   local response
+  local project_id
+
   response=$(curl --silent --show-error --fail \
     --header "X-Domino-Api-Key: ${DOMINO_API_KEY}" \
-    "${DOMINO_URL}/v4/projects")
+    "${DOMINO_URL}/v4/projects") \
+    || error "Impossible de récupérer la liste des projets Domino"
 
-  local project_id
   project_id=$(echo "${response}" | jq -r ".[] | select(.name == \"${project_name}\") | .id" | head -n 1)
 
-  [[ -n "${project_id}" && "${project_id}" != "null" ]] || error "Projet Domino introuvable: ${project_name}"
+  [[ -n "${project_id}" && "${project_id}" != "null" ]] \
+    || error "Projet Domino introuvable: ${project_name}"
 
   echo "${project_id}"
 }
@@ -127,32 +136,40 @@ vault_check_secret_exists() {
     -H "X-Vault-Token: ${VAULT_TOKEN}" \
     -H "X-Vault-Namespace: ${VAULT_NAMESPACE}")
 
-  [[ "${http_code}" == "200" ]] || error "Secret Vault introuvable ou inaccessible: ${VAULT_API_PATH} sur ${VAULT_ENV}"
+  [[ "${http_code}" == "200" ]] \
+    || error "Secret Vault introuvable ou inaccessible: ${VAULT_API_PATH} sur ${VAULT_ENV}. HTTP=${http_code}"
 }
 
 vault_read_secret_value() {
   local key_name="$1"
-
   local response
+  local value
+
   response=$(curl --silent --show-error --fail -X GET \
     "${VAULT_ADDR}/v1/${VAULT_API_PATH}" \
     -H "accept: application/json" \
     -H "X-Vault-Token: ${VAULT_TOKEN}" \
-    -H "X-Vault-Namespace: ${VAULT_NAMESPACE}")
+    -H "X-Vault-Namespace: ${VAULT_NAMESPACE}") \
+    || error "Impossible de lire le secret Vault: ${VAULT_API_PATH}"
 
-  echo "${response}" | jq -r ".data.data[\"${key_name}\"] // empty"
+  value=$(echo "${response}" | jq -r ".data.data[\"${key_name}\"] // empty")
+
+  [[ -n "${value}" ]] || error "Clé Vault manquante: ${key_name}"
+
+  echo "${value}"
 }
 
 domino_env_var_exists() {
   local project_id="$1"
   local var_name="$2"
-
   local response
+  local found
+
   response=$(curl --silent --show-error --fail \
     --header "X-Domino-Api-Key: ${DOMINO_API_KEY}" \
-    "${DOMINO_URL}/v4/projects/${project_id}/environmentVariables")
+    "${DOMINO_URL}/v4/projects/${project_id}/environmentVariables") \
+    || error "Impossible de lire les variables Domino du projet ${project_id}"
 
-  local found
   found=$(echo "${response}" | jq -r ".[] | select(.name == \"${var_name}\") | .id" | head -n 1)
 
   [[ -n "${found}" && "${found}" != "null" ]]
@@ -164,7 +181,7 @@ domino_create_env_var() {
   local var_value="$3"
 
   if domino_env_var_exists "${project_id}" "${var_name}"; then
-    error "La variable ${var_name} existe déjà dans Domino. Supprime-la manuellement depuis Domino puis relance le job."
+    error "La variable ${var_name} existe déjà dans Domino. Supprime-la manuellement depuis Domino puis relance le pipeline."
   fi
 
   log "Création de la variable Domino: ${var_name}"
@@ -180,7 +197,24 @@ domino_create_env_var() {
         value: $value,
         isSecret: true
       }')" \
-    "${DOMINO_URL}/v4/projects/${project_id}/environmentVariables" >/dev/null
+    "${DOMINO_URL}/v4/projects/${project_id}/environmentVariables" >/dev/null \
+    || error "Échec création variable Domino: ${var_name}"
+}
+
+write_dotenv() {
+  local project_id="$1"
+  local access_key="$2"
+  local secret_key="$3"
+
+  cat > "${DOTENV_FILE}" <<EOF
+PROJECT_ID=${project_id}
+ACCESS_VAR_NAME=${DOMINO_ACCESS_VAR_NAME}
+SECRET_VAR_NAME=${DOMINO_SECRET_VAR_NAME}
+ACCESS_KEY=${access_key}
+SECRET_KEY=${secret_key}
+EOF
+
+  chmod 600 "${DOTENV_FILE}"
 }
 
 validate() {
@@ -193,20 +227,20 @@ validate() {
   log "AP code         : ${AP_CODE}"
 
   local project_id
+  local access_key
+  local secret_key
+
   project_id=$(domino_get_project_id "${DOMINO_PROJECT_NAME}")
   log "Projet Domino trouvé: ${project_id}"
 
   vault_check_secret_exists
   log "Secret Vault trouvé: ${VAULT_API_PATH}"
 
-  local access_key
-  local secret_key
-
   access_key=$(vault_read_secret_value "${VAULT_ACCESS_KEY_NAME}")
   secret_key=$(vault_read_secret_value "${VAULT_SECRET_KEY_NAME}")
 
-  [[ -n "${access_key}" ]] || error "Secret Vault manquant: ${VAULT_ACCESS_KEY_NAME}"
-  [[ -n "${secret_key}" ]] || error "Secret Vault manquant: ${VAULT_SECRET_KEY_NAME}"
+  [[ -n "${access_key}" ]] || error "Secret Vault vide: ${VAULT_ACCESS_KEY_NAME}"
+  [[ -n "${secret_key}" ]] || error "Secret Vault vide: ${VAULT_SECRET_KEY_NAME}"
 
   log "Clé Vault trouvée: ${VAULT_ACCESS_KEY_NAME}"
   log "Clé Vault trouvée: ${VAULT_SECRET_KEY_NAME}"
@@ -227,26 +261,17 @@ fetch() {
   log "========== FETCH VAULT =========="
 
   local project_id
+  local access_key
+  local secret_key
+
   project_id=$(domino_get_project_id "${DOMINO_PROJECT_NAME}")
 
   vault_check_secret_exists
 
-  local access_key
-  local secret_key
-
   access_key=$(vault_read_secret_value "${VAULT_ACCESS_KEY_NAME}")
   secret_key=$(vault_read_secret_value "${VAULT_SECRET_KEY_NAME}")
 
-  [[ -n "${access_key}" ]] || error "Secret Vault manquant: ${VAULT_ACCESS_KEY_NAME}"
-  [[ -n "${secret_key}" ]] || error "Secret Vault manquant: ${VAULT_SECRET_KEY_NAME}"
-
-  cat > "${DOTENV_FILE}" <<EOF
-PROJECT_ID=${project_id}
-ACCESS_VAR_NAME=${DOMINO_ACCESS_VAR_NAME}
-SECRET_VAR_NAME=${DOMINO_SECRET_VAR_NAME}
-ACCESS_KEY=${access_key}
-SECRET_KEY=${secret_key}
-EOF
+  write_dotenv "${project_id}" "${access_key}" "${secret_key}"
 
   log "Fichier ${DOTENV_FILE} généré."
 }
