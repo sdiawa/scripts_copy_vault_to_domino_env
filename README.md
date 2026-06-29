@@ -399,3 +399,10 @@ Elles seront utilisables par les Jobs et Apps Domino selon le comportement de l�
 * Ne pas stocker les tokens Vault en clair dans le dépôt Git.
 * Ne pas afficher les valeurs des secrets dans les logs.
 * Protéger et masquer les variables GitLab sensibles.
+
+
+
+curl -s \
+  -H "X-Vault-Token: ${VAULT_TOKEN_PROD_A}" \
+  -H "X-Vault-Namespace: UPM_FRB/ECO021003014" \
+  "https://vault-a-prod.com/v1/secret/data/objsto/co002ixxxx" | jq .
