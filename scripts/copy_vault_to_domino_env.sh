@@ -100,7 +100,7 @@ resolve_vault_config() {
 
 check_required_env() {
   [[ -n "${DOMINO_URL:-}" ]] || error "DOMINO_URL is not set"
-  [[ -n "${DOMINO_API_KEY:-}" ]] || error "DOMINO_API_KEY is not set"
+  [[ -n "${DOMINO_PROJECT_KEY:-}" ]] || error "DOMINO_PROJECT_KEY is not set"
 
   DOMINO_URL="${DOMINO_URL%/}"
 
@@ -115,7 +115,7 @@ domino_get_project_id() {
   local project_id
 
   response=$(curl --silent --show-error --fail \
-    --header "X-Domino-Api-Key: ${DOMINO_API_KEY}" \
+    --header "X-Domino-Api-Key: ${DOMINO_PROJECT_KEY}" \
     "${DOMINO_URL}/v4/projects") \
     || error "Impossible de récupérer la liste des projets Domino"
 
@@ -166,7 +166,7 @@ vault_read_secret_value() {
 #   local found
 
 #   response=$(curl --silent --show-error --fail \
-#     --header "X-Domino-Api-Key: ${DOMINO_API_KEY}" \
+#     --header "X-Domino-Api-Key: ${DOMINO_PROJECT_KEY}" \
 #     "${DOMINO_URL}/v4/projects/${project_id}/environmentVariables") \
 #     || error "Impossible de lire les variables Domino du projet ${project_id}"
 
@@ -205,7 +205,7 @@ domino_create_env_var() {
   log "Création de la variable Domino: ${var_name}"
 
   curl --silent --show-error --fail --request POST \
-    --header "X-Domino-Api-Key: ${DOMINO_API_KEY}" \
+    --header "X-Domino-Api-Key: ${DOMINO_PROJECT_KEY}" \
     --header "Content-Type: application/json" \
     --data "$(jq -n \
       --arg name "${var_name}" \
